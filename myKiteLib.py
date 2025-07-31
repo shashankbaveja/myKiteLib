@@ -184,7 +184,7 @@ class system_initialization:
         self.mysql_database_name = self.config["database_name"]
         self.AccessToken = self.config.get("AccessToken") # Use .get() for safety
 
-        print("read security details")
+        # print("read security details")
 
         self.kite = KiteConnect(api_key=self.api_key, timeout=60)
         self.con = sqlConnector.connect(host=self.mysql_hostname, user=self.mysql_username, password=self.mysql_password, database=self.mysql_database_name, port=self.mysql_port,auth_plugin='mysql_native_password')
@@ -226,7 +226,8 @@ class system_initialization:
     def init_trading(self):
         self.kite.set_access_token(self.AccessToken)
         try:
-            data = self.kite.historical_data(256265,'2025-05-15','2025-05-15','minute')
+            # data = self.kite.historical_data(256265,'2025-05-15','2025-05-15','minute')
+            data = self.kite.ltp(256265)
         except KiteException as e:
             print(e)
             print("Access token expired, Generating new token")
@@ -276,7 +277,7 @@ class system_initialization:
         cursor = self.con.cursor()
         query = "Select token from daily_token_log where date(created_at) = '{}' order by created_at desc limit 1;".format(datetime.date.today())
         cursor.execute(query)
-        print("read token from DB")
+        # print("read token from DB")
         for row in cursor:
             if row is None:
                 return ''
@@ -310,7 +311,7 @@ class system_initialization:
     def run_query_full(self, query):
         self.con = sqlConnector.connect(host=self.mysql_hostname, user=self.mysql_username, password=self.mysql_password, database=self.mysql_database_name, port=self.mysql_port,auth_plugin='mysql_native_password')
         Pnl = pd.read_sql(query, self.con)
-        print("Ran Full QUery")
+        # print("Ran Full QUery")
         self.con.close()
         return Pnl
 
@@ -328,7 +329,7 @@ class system_initialization:
             )
             cursor = con.cursor()
             cursor.execute(query)
-            print("run query")
+            # print("run query")
             results_list = cursor.fetchall()
             flat_list = [item[0] for item in results_list]
             return flat_list
@@ -415,7 +416,7 @@ class system_initialization:
         if len(df) == 0:
             print('No data returned')
             return
-        print("downloading instruments")
+        # print("downloading instruments")
         return df
 
     def save_data_to_db(self, data, tableName):
@@ -472,9 +473,10 @@ class OrderPlacement():
         self.totp_key = self.config["totp_key"]
         self.AccessToken = self.config.get("AccessToken") # Use .get() for safety
         
-        print("read security details")
+        # print("read security details")
 
         self.kite = KiteConnect(api_key=self.api_key, timeout=60)
+        self.kite.set_access_token(self.AccessToken)
         
         # self.k_apis = kiteAPIs()  # This seems to cause a circular dependency or redundant initialization
         print("OrderPlacement module initialized. Ensure init_trading() is called if access token needs refresh.")
@@ -548,12 +550,14 @@ class OrderPlacement():
             return order_id
         
         except KiteException as e:
-            # print(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: Kite API Exception: {e}")
-            return e
+            print(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: Kite API Exception: {e}")
+            self.send_telegram_message(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: Kite API Exception: {e}")
+            raise e
             # Consider specific error handling or re-raising
         except Exception as e:
-            # print(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: General Exception: {e}")
-            return e
+            print(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: General Exception: {e}")
+            self.send_telegram_message(f"[{datetime.datetime.now()}] PLACE_ORDER_LIVE: General Exception: {e}")
+            raise e
         return None
 
     def get_ltp_live(self, instrument_tokens: list[int | str]) -> dict[int, float]:
@@ -605,8 +609,10 @@ class OrderPlacement():
 
         except KiteException as e:
             print(f"OrderPlacement: Kite API error fetching LTP for tokens {instrument_tokens}: {e}")
+            return e
         except Exception as e:
             print(f"OrderPlacement: General error fetching LTP for tokens {instrument_tokens}: {e}")
+            return e
         
         return {}
 
@@ -627,6 +633,7 @@ class kiteAPIs:
         self.mysql_hostname = self.startKiteSession.mysql_hostname
         self.mysql_port = self.startKiteSession.mysql_port
         self.mysql_database_name = self.startKiteSession.mysql_database_name
+        
 
 
 
@@ -717,8 +724,16 @@ class kiteAPIs:
         self.con.close()
         return df['instrument_token'].values.astype(int).tolist()
 
+    # def extract_data_from_db(self, from_date, to_date, interval, instrument_token):
+    #     query = f"SELECT a.*, b.strike FROM kiteConnect.historical_data_{interval} a left join kiteConnect.instruments_zerodha b on a.instrument_token = b.instrument_token where date(a.timestamp) between '{from_date}' and '{to_date}' and a.instrument_token in ({instrument_token})"
+    #     self.con = sqlConnector.connect(host=self.mysql_hostname, user=self.mysql_username, password=self.mysql_password, database=self.mysql_database_name, port=self.mysql_port,auth_plugin='mysql_native_password')
+    #     df = pd.read_sql(query, self.con)
+    #     self.con.close()
+    #     return df
+
     def extract_data_from_db(self, from_date, to_date, interval, instrument_token):
-        query = f"SELECT a.*, b.strike FROM kiteConnect.historical_data_{interval} a left join kiteConnect.instruments_zerodha b on a.instrument_token = b.instrument_token where date(a.timestamp) between '{from_date}' and '{to_date}' and a.instrument_token in ({instrument_token})"
+        query = f"SELECT a.instrument_token, a.timestamp, a.open, a.high, a.low, a.close, a.volume FROM kiteConnect.historical_data_{interval} a where date(a.timestamp) between '{from_date}' and '{to_date}' and a.instrument_token in ({instrument_token})"
+        # print("query", query)
         self.con = sqlConnector.connect(host=self.mysql_hostname, user=self.mysql_username, password=self.mysql_password, database=self.mysql_database_name, port=self.mysql_port,auth_plugin='mysql_native_password')
         df = pd.read_sql(query, self.con)
         self.con.close()
@@ -769,7 +784,7 @@ class kiteAPIs:
 
         token_exceptions = []
         MAX_RETRIES = 3
-        RETRY_DELAY_SECONDS = 5
+        RETRY_DELAY_SECONDS = 3
 
         for t in tokens:
             # print(f"Fetching data for token: {t}")
@@ -787,6 +802,10 @@ class kiteAPIs:
                         break
                     elif attempt < MAX_RETRIES - 1 and str(e) != 'invalid token':
                         print(f"  Retrying in {RETRY_DELAY_SECONDS} seconds...")
+                        # self.startKiteSession.hard_refresh_access_token()
+                        time.sleep(RETRY_DELAY_SECONDS)
+                    elif attempt < MAX_RETRIES and str(e) != 'invalid token':
+                        print(f"  Retrying in {RETRY_DELAY_SECONDS} seconds...")
                         self.startKiteSession.hard_refresh_access_token()
                         time.sleep(RETRY_DELAY_SECONDS)
                     else:
@@ -797,8 +816,12 @@ class kiteAPIs:
                     print(f"  An unexpected error occurred on attempt {attempt + 1} for token {t}: {type(e).__name__} - {str(e)}")
                     if attempt < MAX_RETRIES - 1:
                         print(f"  Retrying in {RETRY_DELAY_SECONDS} seconds...")
-                        self.startKiteSession.hard_refresh_access_token()
+                        # self.startKiteSession.hard_refresh_access_token()
                         time.sleep(RETRY_DELAY_SECONDS)
+                    elif attempt < MAX_RETRIES:
+                        print(f"  Retrying in {RETRY_DELAY_SECONDS} seconds...")
+                        self.startKiteSession.hard_refresh_access_token()
+                        # time.sleep(RETRY_DELAY_SECONDS)
                     else:
                         print(f"  Max retries reached for token {t} due to unexpected error. Adding to exceptions.")
                         token_exceptions.append(t)
@@ -836,6 +859,8 @@ class kiteAPIs:
                     target_table_name = "kiteConnect.historical_data_minute"
                 elif interval == 'day':
                     target_table_name = "kiteConnect.historical_data_day"
+                elif interval == '5minute':
+                    target_table_name = "kiteConnect.historical_data_5minute"
                 
 
                 if target_table_name and data_to_insert:
